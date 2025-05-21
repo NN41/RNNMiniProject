@@ -53,7 +53,8 @@ df_raw = df[['open','high','low','close']]
 
 # %%
 
-df_24h = df_raw[['open']][df_raw.index.hour == 8]
+# df_24h = df_raw[['open']][df_raw.index.hour == 8]
+df_24h = df_raw[['open']]
 
 df_input = (df_24h / df_24h.shift() - 1) # percentage change of the open price
 df_input = df_input[1:-1] # handle nans
@@ -63,7 +64,7 @@ df_target = df_target[1:-1] # handle nans
 
 # %%
 
-window_size = 7
+window_size = 24
 n_samples = df_input.shape[0]
 
 frac_train = 0.8
@@ -113,7 +114,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 n_features = 1
-n_hidden = 4
+n_hidden = 16
 n_classes = 2
 
 class RNN(nn.Module):
@@ -134,19 +135,14 @@ print(rnn)
 
 # %%
 
-XX, yy = train_dataset[100:120]
-target = yy.flatten()
-logits = rnn(XX)
-probabilities = nn.Softmax(dim=-1)(logits)
-classes = probabilities.argmax(dim=-1)
+# XX, yy = train_dataset[100:120]
+# target = yy.flatten()
+# logits = rnn(XX)
+# probabilities = nn.Softmax(dim=-1)(logits)
+# classes = probabilities.argmax(dim=-1)
 
-logits, probabilities, classes, target
+# logits, probabilities, classes, target
 # %%
-
-# nn.CrossEntropyLoss()(logits, target)
-
-criterion = nn.CrossEntropyLoss()
-model = rnn
 
 def test(model, criterion):
 
@@ -171,18 +167,15 @@ def test(model, criterion):
     accuracy = n_correct / n_samples
     return avg_loss, accuracy
 
-avg_loss, acc = test(model, criterion)
-print(f"avg test loss = {avg_loss:.5f} | accuracy = {acc * 100:.2f}%")
-
-# %%
-
 def train(model, criterion, optimizer, n_updates=0):
 
     n_batches = len(train_dataloader)
     # n_updates = 3
     update_batches = np.linspace(0, n_batches-1, n_updates).astype(int)
     total_loss_between_updates = 0
+    total_loss = 0
     n_samples_between_updates = 0
+    n_samples = 0
 
     model.train()
 
@@ -203,21 +196,60 @@ def train(model, criterion, optimizer, n_updates=0):
         optimizer.step()
 
         n_samples_between_updates += len(target)
+        n_samples += len(target)
+        total_loss += loss.item() * len(target)
         total_loss_between_updates += loss.item() * len(target)
         if batch in update_batches:
             avg_loss_between_updates = total_loss_between_updates / n_samples_between_updates
             print(f"\t{batch+1} / {n_batches} | avg train loss {avg_loss_between_updates:.5f}")
             n_samples_between_updates = 0
             total_loss_between_updates = 0
+    
+    avg_train_loss = total_loss / n_samples
+    return avg_train_loss
 
+# %%
+
+criterion = nn.CrossEntropyLoss()
+model = RNN(input_size=1, hidden_size=16, output_size=2).to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=0.01,)
-EPOCHS = 10
 
-avg_loss, acc = test(model, criterion)
-print(f"avg test loss = {avg_loss:.5f} | accuracy = {acc * 100:.2f}%")
+print(model)
+# %%
+
+EPOCHS = 25
+
+test_loss, test_acc = test(model, criterion)
+print(f"avg test loss = {test_loss:.5f} | accuracy = {test_acc * 100:.2f}%")
+
+logs = []
+initial_log = {
+    "epoch": 0,
+    "test_loss": test_loss,
+    "test_acc": test_acc,
+    "train_loss": None,
+}
+logs.append(initial_log)
 
 for epoch in range(EPOCHS):
     print(f"\nepoch {epoch+1} / {EPOCHS}")
-    train(model, criterion, optimizer, n_updates=3)
-    avg_loss, acc = test(model, criterion)
-    print(f"avg test loss = {avg_loss:.5f} | accuracy = {acc * 100:.2f}%")
+
+    train_loss = train(model, criterion, optimizer, n_updates=5)
+
+    test_loss, test_acc = test(model, criterion)
+    print(f"avg test loss = {test_loss:.5f} | accuracy = {test_acc * 100:.2f}%")
+
+    log = {
+        "epoch": epoch+1,
+        "test_loss": test_loss,
+        "test_acc": test_acc,
+        "train_loss": train_loss,
+    }
+    logs.append(log)
+
+# %%
+
+df_logs = pd.DataFrame(logs).set_index('epoch')
+
+plt.plot(df_logs[['train_loss','test_loss']], label=['train_loss', 'test_loss'])
+plt.legend()
