@@ -103,7 +103,7 @@ train_dataset = TensorDataset(X_train, y_train)
 test_dataset = TensorDataset(X_test, y_test)
 
 train_dataloader = DataLoader(train_dataset, batch_size=32, shuffle=True,
-                              generator=torch.Generator(device=device).manual_seed(0))
+                              generator=torch.Generator().manual_seed(0))
 test_dataloader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
 print(f"window size = {window_size} | train examples = {len(train_dataset)} | test examples = {len(test_dataset)}")
@@ -166,7 +166,7 @@ def test(model, criterion):
             n_samples += len(target)
             loss_total += criterion(logits, target).item() * len(target)
             n_correct += (logits.argmax(dim=-1) == target).sum().item()
-            
+
     avg_loss = loss_total / n_samples
     accuracy = n_correct / n_samples
     return avg_loss, accuracy
@@ -176,7 +176,48 @@ print(f"avg test loss = {avg_loss:.5f} | accuracy = {acc * 100:.2f}%")
 
 # %%
 
+def train(model, criterion, optimizer, n_updates=0):
 
+    n_batches = len(train_dataloader)
+    # n_updates = 3
+    update_batches = np.linspace(0, n_batches-1, n_updates).astype(int)
+    total_loss_between_updates = 0
+    n_samples_between_updates = 0
 
+    model.train()
 
+    # if n_updates > 0:
+    #     print(f"[batch] / {n_batches} | [avg train loss between updates]")
+    
+    for batch, (X, y) in enumerate(train_dataloader):
+        X, y = X.to(device), y.to(device)
 
+        # forward pass
+        target = y.flatten()
+        logits = model(X)
+        loss = criterion(logits, target)
+
+        # backward pass
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        n_samples_between_updates += len(target)
+        total_loss_between_updates += loss.item() * len(target)
+        if batch in update_batches:
+            avg_loss_between_updates = total_loss_between_updates / n_samples_between_updates
+            print(f"\t{batch+1} / {n_batches} | avg train loss {avg_loss_between_updates:.5f}")
+            n_samples_between_updates = 0
+            total_loss_between_updates = 0
+
+optimizer = torch.optim.Adam(model.parameters(), lr=0.01,)
+EPOCHS = 10
+
+avg_loss, acc = test(model, criterion)
+print(f"avg test loss = {avg_loss:.5f} | accuracy = {acc * 100:.2f}%")
+
+for epoch in range(EPOCHS):
+    print(f"\nepoch {epoch+1} / {EPOCHS}")
+    train(model, criterion, optimizer, n_updates=3)
+    avg_loss, acc = test(model, criterion)
+    print(f"avg test loss = {avg_loss:.5f} | accuracy = {acc * 100:.2f}%")
