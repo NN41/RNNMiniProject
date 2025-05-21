@@ -63,7 +63,7 @@ df_target = df_target[1:-1] # handle nans
 
 # %%
 
-window_size = 3
+window_size = 7
 n_samples = df_input.shape[0]
 
 frac_train = 0.8
@@ -78,7 +78,7 @@ print(f"")
 print(f"number of samples = {n_samples}")
 print(f"window size = {window_size}")
 print(f"train: (start, end) = {train_start_idx, train_end_idx} | test: (start, end) = {test_start_idx, test_end_idx}")
-
+print(f"train samples = {train_end_idx-train_start_idx+1} | test samples = {test_end_idx-test_start_idx+1}")
 # %%
 
 X_train = []
@@ -87,8 +87,8 @@ for idx in range(train_start_idx, train_end_idx+1):
     sequence_end_idx = idx
     input_sequence = df_input.iloc[sequence_start_idx:sequence_end_idx+1].to_numpy()
     X_train.append(input_sequence)
-X_train = torch.tensor(np.array(X_train)).to(device)
-y_train = torch.tensor(df_target[train_start_idx:train_end_idx+1].to_numpy()).to(device)
+X_train = torch.tensor(np.array(X_train), dtype=torch.float32, device=device)
+y_train = torch.tensor(df_target[train_start_idx:train_end_idx+1].to_numpy(), device=device)
 
 X_test = []
 for idx in range(test_start_idx, test_end_idx+1):
@@ -96,11 +96,87 @@ for idx in range(test_start_idx, test_end_idx+1):
     sequence_end_idx = idx
     input_sequence = df_input.iloc[sequence_start_idx:sequence_end_idx+1].to_numpy()
     X_test.append(input_sequence)
-X_test = torch.tensor(np.array(X_test)).to(device)
-y_test = torch.tensor(df_target[test_start_idx:test_end_idx+1].to_numpy()).to(device)
+X_test = torch.tensor(np.array(X_test), dtype=torch.float32, device=device)
+y_test = torch.tensor(df_target[test_start_idx:test_end_idx+1].to_numpy(), device=device)
 
 train_dataset = TensorDataset(X_train, y_train)
 test_dataset = TensorDataset(X_test, y_test)
 
-train_dataloader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+train_dataloader = DataLoader(train_dataset, batch_size=32, shuffle=True,
+                              generator=torch.Generator(device=device).manual_seed(0))
 test_dataloader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+
+print(f"window size = {window_size} | train examples = {len(train_dataset)} | test examples = {len(test_dataset)}")
+# %%
+
+import torch.nn as nn
+import torch.nn.functional as F
+
+n_features = 1
+n_hidden = 4
+n_classes = 2
+
+class RNN(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size):
+        super(RNN, self).__init__()
+        self.rnn = nn.RNN(input_size, hidden_size, batch_first=True) # accepts (batch_size, seq_len, n_features)
+        self.h2o = nn.Linear(hidden_size, output_size)
+
+    def forward(self, x):
+        # h_seq contains all hidden outputs over the entire sequence, h_t is only the last hidden output
+        # we only need h_t to make a prediction at time t
+        h_seq, h_t = self.rnn(x)
+        logits = self.h2o(h_t[0]) # h_t is of shape (1, batch_size, n_hidden), so we can discard the first dim
+        return logits # of shape (batch_size, n_classes)
+
+rnn = RNN(n_features, n_hidden, n_classes).to(device)
+print(rnn)
+
+# %%
+
+XX, yy = train_dataset[100:120]
+target = yy.flatten()
+logits = rnn(XX)
+probabilities = nn.Softmax(dim=-1)(logits)
+classes = probabilities.argmax(dim=-1)
+
+logits, probabilities, classes, target
+# %%
+
+# nn.CrossEntropyLoss()(logits, target)
+
+criterion = nn.CrossEntropyLoss()
+model = rnn
+
+def test(model, criterion):
+
+    loss_total = 0
+    n_correct = 0
+    n_samples = 0
+
+    model.eval()
+
+    for batch, (X, y) in enumerate(test_dataloader):
+        X = X.to(device)
+        y = y.to(device)
+
+        with torch.no_grad():
+            logits = model(X)
+            target = y.flatten()
+            n_samples += len(target)
+            loss_total += criterion(logits, target).item() * len(target)
+            n_correct += (logits.argmax(dim=-1) == target).sum().item()
+            
+    avg_loss = loss_total / n_samples
+    accuracy = n_correct / n_samples
+    return avg_loss, accuracy
+
+avg_loss, acc = test(model, criterion)
+print(f"avg test loss = {avg_loss:.5f} | accuracy = {acc * 100:.2f}%")
+
+# %%
+
+
+
+
+

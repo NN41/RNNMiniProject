@@ -1,1 +1,2 @@
 * Z-normalization of input features
+* Implement a train/test split that starts at a random point in the data (but keep the train and test data grouped)
