@@ -39,32 +39,33 @@ except Exception as e:
 
 df.set_index(TS_COLUMN_NAME, inplace=True)
 df.sort_index(inplace=True)
-df_raw = df[['open','high','low','close']]
-
-# df = df_raw
-# df_o_transformed = df[['open']].div(df['open'].shift(), axis=0) - 1
-# df_hlc_transformed = df[['high','low','close']].div(df['open'], axis=0) - 1
-# df_X = pd.merge(df_o_transformed, df_hlc_transformed, left_index=True, right_index=True).dropna()
-# df_y = ((df[['open']].shift(-1) - df[['open']]).dropna() >= 0).astype(int).rename(columns={'open':'target'})
-# df_Xy = pd.merge(df_X, df_y, left_index=True, right_index=True)
-
-# df_Xy
-
+df_raw = df[['open','high','low','close']].astype(np.float32)
 
 # %%
 
-# df_24h = df_raw[['open']][df_raw.index.hour == 8]
-df_24h = df_raw[['open']]
+# Note that the row with OHLC data at time t corresponds to the OHLC over the interval [t,t+1]. This means that
+# if we observe the OHLC data corresponding to time t, we must actually be at time t+1. 
+# 
+# We prepare the input data at time t by computing percentage returns of H, L, C with respect to O of the same candle
+# and the percentage returns of O with respect to previous O. We also shift it forward by 1, such that the row at time t
+# represents the our knowledge at time t.
+#
+# Our target is predicting if C goes above or below O of within the same interval.
+df = df_raw
 
-df_input = (df_24h / df_24h.shift() - 1) # percentage change of the open price
-df_input = df_input[1:-1] # handle nans
+df_hlc_transformed = (df[['high','low','close']].div(df['open'], axis=0) - 1)
+df_o_transformed = (df[['open']].div(df['open'].shift(), axis=0) - 1)
+df_input = pd.concat([df_o_transformed, df_hlc_transformed], axis=1).shift() # has NaNs at rows indices 0 and 1
+df_target = ((df['close'] - df['open']) >= 0)
 
-df_target = ((-df_24h.diff(-1)) >= 0).astype(int) # 1 if up-move, 0 of down-move
-df_target = df_target[1:-1] # handle nans
+df_input = df_input.iloc[2:].astype(np.float32)
+df_target = df_target.iloc[2:].astype(int)
+
+df_input.head(), df_target.head()
 
 # %%
 
-window_size = 24
+window_size = 30 * 24
 n_samples = df_input.shape[0]
 
 frac_train = 0.8
@@ -80,6 +81,8 @@ print(f"number of samples = {n_samples}")
 print(f"window size = {window_size}")
 print(f"train: (start, end) = {train_start_idx, train_end_idx} | test: (start, end) = {test_start_idx, test_end_idx}")
 print(f"train samples = {train_end_idx-train_start_idx+1} | test samples = {test_end_idx-test_start_idx+1}")
+
+
 # %%
 
 X_train = []
@@ -103,9 +106,9 @@ y_test = torch.tensor(df_target[test_start_idx:test_end_idx+1].to_numpy(), devic
 train_dataset = TensorDataset(X_train, y_train)
 test_dataset = TensorDataset(X_test, y_test)
 
-train_dataloader = DataLoader(train_dataset, batch_size=32, shuffle=True,
+train_dataloader = DataLoader(train_dataset, batch_size=64, shuffle=True,
                               generator=torch.Generator().manual_seed(0))
-test_dataloader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+test_dataloader = DataLoader(test_dataset, batch_size=64, shuffle=False)
 
 print(f"window size = {window_size} | train examples = {len(train_dataset)} | test examples = {len(test_dataset)}")
 # %%
@@ -113,7 +116,7 @@ print(f"window size = {window_size} | train examples = {len(train_dataset)} | te
 import torch.nn as nn
 import torch.nn.functional as F
 
-n_features = 1
+n_features = X_train.shape[-1]
 n_hidden = 16
 n_classes = 2
 
@@ -211,13 +214,13 @@ def train(model, criterion, optimizer, n_updates=0):
 # %%
 
 criterion = nn.CrossEntropyLoss()
-model = RNN(input_size=1, hidden_size=16, output_size=2).to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=0.01,)
-
+model = RNN(input_size=X_train.shape[-1], hidden_size=8, output_size=2).to(device)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.001,)
 print(model)
+
 # %%
 
-EPOCHS = 25
+EPOCHS = 200
 
 test_loss, test_acc = test(model, criterion)
 print(f"avg test loss = {test_loss:.5f} | accuracy = {test_acc * 100:.2f}%")
@@ -250,6 +253,9 @@ for epoch in range(EPOCHS):
 # %%
 
 df_logs = pd.DataFrame(logs).set_index('epoch')
-
 plt.plot(df_logs[['train_loss','test_loss']], label=['train_loss', 'test_loss'])
+
 plt.legend()
+# %%
+
+y_train.sum() / len(y_train), y_test.sum() / len(y_test)
