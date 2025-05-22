@@ -138,13 +138,14 @@ print(rnn)
 
 # %%
 
-# XX, yy = train_dataset[100:120]
-# target = yy.flatten()
-# logits = rnn(XX)
-# probabilities = nn.Softmax(dim=-1)(logits)
-# classes = probabilities.argmax(dim=-1)
+rnn.eval()
+with torch.no_grad(): 
+    input_sequence, target = train_dataset[200:220]
+    logits = rnn(input_sequence)
+    probabilities = nn.Softmax(dim=-1)(logits)
+    classes = probabilities.argmax(dim=-1)
 
-# logits, probabilities, classes, target
+logits, probabilities, classes, target
 # %%
 
 def test(model, criterion):
@@ -154,17 +155,13 @@ def test(model, criterion):
     n_samples = 0
 
     model.eval()
-
-    for batch, (X, y) in enumerate(test_dataloader):
-        X = X.to(device)
-        y = y.to(device)
-
-        with torch.no_grad():
+    with torch.no_grad():
+        for batch, (X, y) in enumerate(test_dataloader):
+            X, y = X.to(device), y.to(device)   
             logits = model(X)
-            target = y.flatten()
-            n_samples += len(target)
-            loss_total += criterion(logits, target).item() * len(target)
-            n_correct += (logits.argmax(dim=-1) == target).sum().item()
+            n_samples += len(y)
+            loss_total += criterion(logits, y).item() * len(y)
+            n_correct += (logits.argmax(dim=-1) == y).sum().item()
 
     avg_loss = loss_total / n_samples
     accuracy = n_correct / n_samples
@@ -180,28 +177,25 @@ def train(model, criterion, optimizer, n_updates=0):
     n_samples_between_updates = 0
     n_samples = 0
 
-    model.train()
-
     # if n_updates > 0:
     #     print(f"[batch] / {n_batches} | [avg train loss between updates]")
-    
+    model.train()
     for batch, (X, y) in enumerate(train_dataloader):
         X, y = X.to(device), y.to(device)
 
         # forward pass
-        target = y.flatten()
         logits = model(X)
-        loss = criterion(logits, target)
+        loss = criterion(logits, y)
 
         # backward pass
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
-        n_samples_between_updates += len(target)
-        n_samples += len(target)
-        total_loss += loss.item() * len(target)
-        total_loss_between_updates += loss.item() * len(target)
+        n_samples_between_updates += len(y)
+        n_samples += len(y)
+        total_loss += loss.item() * len(y)
+        total_loss_between_updates += loss.item() * len(y)
         if batch in update_batches:
             avg_loss_between_updates = total_loss_between_updates / n_samples_between_updates
             print(f"\t{batch+1} / {n_batches} | avg train loss {avg_loss_between_updates:.5f}")
@@ -211,28 +205,78 @@ def train(model, criterion, optimizer, n_updates=0):
     avg_train_loss = total_loss / n_samples
     return avg_train_loss
 
+def get_tensor_metrics(tensor):
+
+    metrics_dict = {
+        "l2": torch.norm(tensor, p=2).item(),
+        "mean": tensor.mean().item(),
+        "std": tensor.std().item(),
+        "abs_min": tensor.abs().min().item(),
+        "abs_max": tensor.abs().max().item(),
+    }
+
+    for quantile in [0.5, 0.1, 0.01, 0.001]:
+        key = f"abs_q_{quantile}"
+        metrics_dict[key] = torch.quantile(tensor.abs(), quantile).item()
+        
+    return metrics_dict
+
+def get_param_metrics(param):
+
+    param_data_metrics = get_tensor_metrics(param.data)
+    param_grad_metrics = get_tensor_metrics(torch.zeros(param.data.shape))
+    if not param.grad is None:
+        param_grad_metrics = get_tensor_metrics(param.grad)
+
+    param_metrics = {
+        "data": param_data_metrics,
+        "grad": param_grad_metrics,
+    }
+
+    return param_metrics
+
+def get_all_param_metrics(model):
+    dic = {}
+    for name, param in model.named_parameters():
+        dic[name] = get_param_metrics(param)
+    return dic
+
+def flatten_nested_dict(dictionary, parent_key='', separator='_'):
+    items = []
+    for key, value in dictionary.items():
+        new_key = parent_key + separator + key if parent_key else key
+        if isinstance(value, dict):
+            items.extend(flatten_nested_dict(value, new_key, separator=separator).items())
+        else:
+            items.append((new_key, value))
+    return dict(items)
+
+
 # %%
 
 criterion = nn.CrossEntropyLoss()
-model = RNN(input_size=X_train.shape[-1], hidden_size=8, output_size=2).to(device)
+model = RNN(input_size=X_train.shape[-1], hidden_size=32, output_size=2).to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001,)
 print(model)
 
 # %%
 
-EPOCHS = 200
+EPOCHS = 3
 
 test_loss, test_acc = test(model, criterion)
 print(f"avg test loss = {test_loss:.5f} | accuracy = {test_acc * 100:.2f}%")
 
 logs = []
+logs_flattened = []
 initial_log = {
     "epoch": 0,
     "test_loss": test_loss,
     "test_acc": test_acc,
     "train_loss": None,
+    "": get_all_param_metrics(model),
 }
 logs.append(initial_log)
+logs_flattened.append(flatten_nested_dict(initial_log, separator='/'))
 
 for epoch in range(EPOCHS):
     print(f"\nepoch {epoch+1} / {EPOCHS}")
@@ -247,15 +291,40 @@ for epoch in range(EPOCHS):
         "test_loss": test_loss,
         "test_acc": test_acc,
         "train_loss": train_loss,
+        "": get_all_param_metrics(model),
     }
     logs.append(log)
+    logs_flattened.append(flatten_nested_dict(log, separator='/'))
 
 # %%
 
-df_logs = pd.DataFrame(logs).set_index('epoch')
-plt.plot(df_logs[['train_loss','test_loss']], label=['train_loss', 'test_loss'])
+df_logs = pd.DataFrame(logs_flattened).set_index('epoch')
 
-plt.legend()
-# %%
+rows = 2
+cols = 2
+figsize_mult = 8
+fig, axes = plt.subplots(rows, cols, figsize=(cols * figsize_mult, rows * figsize_mult))
 
-y_train.sum() / len(y_train), y_test.sum() / len(y_test)
+ax = axes[0,0]
+cols = ['train_loss','test_loss']
+ax.plot(df_logs[cols], label=cols)
+ax.legend()
+ax.grid()
+
+ax = axes[0,1]
+cols = ['test_acc']
+ax.plot(df_logs[cols], label=cols)
+ax.legend()
+ax.grid()
+
+ax = axes[1,0]
+cols = [col for col in df_logs.columns if 'grad/l2' in col]
+ax.plot(df_logs[cols], label=cols)
+ax.legend()
+ax.grid()
+
+ax = axes[1,1]
+cols = [col for col in df_logs.columns if 'grad/abs_max' in col]
+ax.plot(df_logs[cols], label=cols)
+ax.legend()
+ax.grid()
