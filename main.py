@@ -130,22 +130,42 @@ class RNN(nn.Module):
         # h_seq contains all hidden outputs over the entire sequence, h_t is only the last hidden output
         # we only need h_t to make a prediction at time t
         h_seq, h_t = self.rnn(x)
-        logits = self.h2o(h_t[0]) # h_t is of shape (1, batch_size, n_hidden), so we can discard the first dim
-        return logits # of shape (batch_size, n_classes)
+        logits_t = self.h2o(h_t.squeeze()) # h_t is of shape (1, batch_size, n_hidden), so we can discard the first dim
+        return logits_t # of shape (batch_size, n_classes)
 
 rnn = RNN(n_features, n_hidden, n_classes).to(device)
-print(rnn)
+# print(rnn)
+
+class LSTM(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size):
+        super().__init__()
+        self.lstm = nn.LSTM(input_size, hidden_size, batch_first=True)
+        self.h2o = nn.Linear(hidden_size, output_size)
+
+    def forward(self, x):
+        # h_seq has shape (batch_size, seq_len, hidden_size) because batch_first=True
+        # h_n and c_n have shape (1, batch_size, hidden_size)
+        # logits_t has shape (batch_size, output_size)
+        h_seq, (h_t, c_t) = self.lstm(x)
+        logits_t = self.h2o(h_t.squeeze())
+        return logits_t
+
+lstm = LSTM(n_features, n_hidden, n_classes).to(device)
 
 # %%
 
-rnn.eval()
+# model = rnn
+model = lstm
+
+model.eval()
 with torch.no_grad(): 
     input_sequence, target = train_dataset[200:220]
-    logits = rnn(input_sequence)
+    logits = model(input_sequence)
     probabilities = nn.Softmax(dim=-1)(logits)
     classes = probabilities.argmax(dim=-1)
 
 logits, probabilities, classes, target
+
 # %%
 
 def test(model, criterion):
@@ -190,6 +210,7 @@ def train(model, criterion, optimizer, n_updates=0):
         # backward pass
         optimizer.zero_grad()
         loss.backward()
+        nn.utils.clip_grad_norm_(model.parameters(), 3)
         optimizer.step()
 
         n_samples_between_updates += len(y)
@@ -254,14 +275,20 @@ def flatten_nested_dict(dictionary, parent_key='', separator='_'):
 
 # %%
 
+# model = RNN(input_size=X_train.shape[-1], hidden_size=32, output_size=2).to(device)
+model = LSTM(input_size=X_train.shape[-1], hidden_size=4, output_size=2).to(device)
+
 criterion = nn.CrossEntropyLoss()
-model = RNN(input_size=X_train.shape[-1], hidden_size=32, output_size=2).to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001,)
+optimizer = torch.optim.SGD(
+    model.parameters(), 
+    lr=0.001, 
+    # weight_decay=0.00001 # 0.01 is too high and the model doesn't improve, 0.0001 is pretty good
+)
 print(model)
 
 # %%
 
-EPOCHS = 3
+EPOCHS = 1000
 
 test_loss, test_acc = test(model, criterion)
 print(f"avg test loss = {test_loss:.5f} | accuracy = {test_acc * 100:.2f}%")
@@ -296,11 +323,11 @@ for epoch in range(EPOCHS):
     logs.append(log)
     logs_flattened.append(flatten_nested_dict(log, separator='/'))
 
-# %%
 
+# %%
 df_logs = pd.DataFrame(logs_flattened).set_index('epoch')
 
-rows = 2
+rows = 4
 cols = 2
 figsize_mult = 8
 fig, axes = plt.subplots(rows, cols, figsize=(cols * figsize_mult, rows * figsize_mult))
@@ -310,6 +337,7 @@ cols = ['train_loss','test_loss']
 ax.plot(df_logs[cols], label=cols)
 ax.legend()
 ax.grid()
+# ax.set_ylim((0.687,0.705))
 
 ax = axes[0,1]
 cols = ['test_acc']
@@ -328,3 +356,32 @@ cols = [col for col in df_logs.columns if 'grad/abs_max' in col]
 ax.plot(df_logs[cols], label=cols)
 ax.legend()
 ax.grid()
+
+ax = axes[2,0]
+cols = [col for col in df_logs.columns if 'data/l2' in col]
+ax.plot(df_logs[cols], label=cols)
+ax.legend()
+ax.grid()
+
+ax = axes[2,1]
+cols = [col for col in df_logs.columns if 'data/abs_max' in col]
+ax.plot(df_logs[cols], label=cols)
+ax.legend()
+ax.grid()
+
+ax = axes[3,0]
+cols = [col for col in df_logs.columns if 'grad/abs_q_0.01' in col]
+ax.plot(df_logs[cols], label=cols)
+ax.legend()
+ax.grid()
+
+ax = axes[3,1]
+cols = [col for col in df_logs.columns if 'data/abs_q_0.01' in col]
+ax.plot(df_logs[cols], label=cols)
+ax.legend()
+ax.grid()
+
+# %%
+
+# df_logs[]
+# [col for col in df_logs.columns if 'grad/l2' in col]

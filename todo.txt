@@ -1,2 +1,10 @@
 * Z-normalization of input features
 * Implement a train/test split that starts at a random point in the data (but keep the train and test data grouped)
+* Add moving averages and other basic indicators to the input features
+* Implement dropout
+* Find evidence of exploding or vanishing gradients in a very simple model
+* Investigate what the model actually outputs. What are the patterns that it picks up on?
+
+
+* Idea: change the pytorch LSTM implementation to be able to take the previous cell state as input as well,
+see goodfellow Section 10.10.1
