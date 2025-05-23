@@ -152,6 +152,18 @@ class LSTM(nn.Module):
 
 lstm = LSTM(n_features, n_hidden, n_classes).to(device)
 
+
+class GRU(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size):
+        super().__init__()
+        self.gru = nn.GRU(input_size, hidden_size, batch_first=True)
+        self.h2o = nn.Linear(hidden_size, output_size)
+
+    def forward(self, x):
+        h_seq, h_t = self.gru(x)
+        logits_t = self.h2o(h_t.squeeze())
+        return logits_t
+
 # %%
 
 # model = rnn
